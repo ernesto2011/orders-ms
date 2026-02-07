@@ -2,7 +2,7 @@ import { HttpStatus, Inject, Injectable, Logger, OnModuleInit } from '@nestjs/co
 import { ChangeOrderStatusDto, CreateOrderDto, OrderPaginationDto } from './dto';
 import { PrismaClient } from 'generated/prisma';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { PRODUCT_SERVICE } from 'src/config';
+import { NATS_SERVICE } from 'src/config';
 import { firstValueFrom } from 'rxjs';
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
@@ -10,7 +10,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   private readonly logger = new Logger('OrdersService');
 
   constructor(
-    @Inject(PRODUCT_SERVICE) private readonly clientProductService: ClientProxy
+    @Inject(NATS_SERVICE) private readonly client: ClientProxy
   ) {
     super()
   }
@@ -24,7 +24,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       const productIds = createOrderDto.items.map(item=> item.productId)
       const products = 
       await firstValueFrom(
-        this.clientProductService.send({ cmd: 'validate_products' }, productIds)
+        this.client.send({ cmd: 'validate_products' }, productIds)
       )
       const totalAmount = createOrderDto.items.reduce((acc,orderItem)=>{
         const price =products.find(product => product.id === orderItem.productId).price
@@ -79,32 +79,27 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   async findAll(orderPaginationDto: OrderPaginationDto) {
     const totalPages = await this.order.count({
       where: {
-        status: orderPaginationDto.status
-      }
-    })
-    const perPage = orderPaginationDto.limit;
-    const lastPage = Math.ceil(totalPages / perPage!);
+        status: orderPaginationDto.status,
+      },
+    });
+
     const currentPage = orderPaginationDto.page;
-    if (currentPage! > lastPage) {
-      throw new RpcException({
-        status: HttpStatus.NOT_FOUND,
-        message: `Page ${currentPage} not found`
-      });
-    }
+    const perPage = orderPaginationDto.limit;
+
     return {
       data: await this.order.findMany({
         skip: (currentPage! - 1) * perPage!,
         take: perPage,
-        where:{
-          status: orderPaginationDto.status
-        }
+        where: {
+          status: orderPaginationDto.status,
+        },
       }),
-      meta:{
+      meta: {
         total: totalPages,
-        currentPage,
-        lastPage: Math.ceil(totalPages / perPage!)
-      }
-    }
+        page: currentPage,
+        lastPage: Math.ceil(totalPages / perPage!),
+      },
+    };
   }
 
   async findOne(id: string) {
@@ -128,7 +123,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
 
     const productIds = order.OrderItem.map(orderItem => orderItem.productId)
 
-    const products = await firstValueFrom(this.clientProductService.send({ cmd: 'validate_products' }, productIds))
+    const products = await firstValueFrom(this.client.send({ cmd: 'validate_products' }, productIds))
 
     return {
       ...order,
